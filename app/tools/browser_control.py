@@ -140,10 +140,79 @@ class BrowserController:
         self._simulated: Optional[SimulatedWebpage] = None
         self._is_real_playwright = False
 
+    @staticmethod
+    def auto_launch_chrome(port: int = 9222, url: str = "https://www.youtube.com") -> bool:
+        """Locates and auto-launches local Chrome with remote debugging on port 9222"""
+        import subprocess, sys, shutil, os
+        is_windows = sys.platform == "win32"
+        is_mac = sys.platform == "darwin"
+
+        debug_dir = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "agent-chrome-debug") if is_windows else "/tmp/agent-chrome-debug"
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        candidate_paths = []
+        if is_windows:
+            p_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+            p_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+            l_appdata = os.environ.get("LOCALAPPDATA", "")
+            candidate_paths = [
+                os.path.join(p_files, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(p_files_x86, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(l_appdata, "Google", "Chrome", "Application", "chrome.exe"),
+                "chrome.exe",
+            ]
+        elif is_mac:
+            candidate_paths = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
+        else:
+            candidate_paths = ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]
+
+        for cand in candidate_paths:
+            if shutil.which(cand) or os.path.exists(cand):
+                try:
+                    subprocess.Popen(
+                        [cand, f"--remote-debugging-port={port}", f"--user-data-dir={debug_dir}", "--no-first-run", url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        shell=is_windows,
+                    )
+                    return True
+                except Exception:
+                    pass
+        return False
+
     async def initialize(self) -> None:
         try:
             from playwright.async_api import async_playwright
             self.playwright = await async_playwright().start()
+
+            # First priority: connect to live Chrome via CDP (Port 9222)
+            try:
+                self.browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=2000)
+                contexts = self.browser.contexts
+                context = contexts[0] if contexts else await self.browser.new_context()
+                pages = context.pages
+                self.page = pages[0] if pages else await context.new_page()
+                self._is_real_playwright = True
+                return
+            except Exception:
+                # If CDP not running, attempt auto-launch
+                self.auto_launch_chrome(9222)
+                await asyncio.sleep(1.0)
+                try:
+                    self.browser = await self.playwright.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=2000)
+                    contexts = self.browser.contexts
+                    context = contexts[0] if contexts else await self.browser.new_context()
+                    pages = context.pages
+                    self.page = pages[0] if pages else await context.new_page()
+                    self._is_real_playwright = True
+                    return
+                except Exception:
+                    pass
+
+            # Second priority: standard Playwright launch
             self.browser = await self.playwright.chromium.launch(
                 headless=self.headless,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]

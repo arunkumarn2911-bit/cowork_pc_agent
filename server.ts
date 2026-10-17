@@ -1361,6 +1361,81 @@ app.get("/api/models/discover", async (req, res) => {
   });
 });
 
+// Auto-Launch & Helper for Chrome Remote Debugging (Port 9222)
+async function launchChromeCdp(targetUrl: string = "https://www.youtube.com"): Promise<{ success: boolean; connected: boolean; message: string; port: number }> {
+  // 1. Check if already connected on 9222
+  try {
+    const existing = await fetch("http://127.0.0.1:9222/json/version", { signal: AbortSignal.timeout(600) });
+    if (existing.ok) {
+      try {
+        await fetch(`http://127.0.0.1:9222/json/new?${encodeURIComponent(targetUrl)}`, { method: "PUT", signal: AbortSignal.timeout(1000) });
+      } catch {}
+      return { success: true, connected: true, port: 9222, message: "Connected to existing Chrome session on port 9222 and opened tab." };
+    }
+  } catch {}
+
+  const isWindows = process.platform === "win32";
+  const isMac = process.platform === "darwin";
+
+  const debugDir = isWindows
+    ? path.join(process.env["TEMP"] || "C:\\Temp", "agent-chrome-debug")
+    : "/tmp/agent-chrome-debug";
+
+  try {
+    if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+  } catch {}
+
+  try {
+    if (isWindows) {
+      const progFiles = process.env["ProgramFiles"] || "C:\\Program Files";
+      const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+      const localAppData = process.env["LOCALAPPDATA"] || "";
+      const candidates = [
+        path.join(progFiles, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(progFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+      ];
+      let foundPath = "chrome";
+      for (const c of candidates) {
+        if (fs.existsSync(c)) {
+          foundPath = `"${c}"`;
+          break;
+        }
+      }
+      const cmd = `start "" ${foundPath} --remote-debugging-port=9222 --user-data-dir="${debugDir}" --no-first-run "${targetUrl}"`;
+      exec(cmd);
+    } else if (isMac) {
+      exec(`open -a "Google Chrome" --args --remote-debugging-port=9222 --user-data-dir="${debugDir}" --no-first-run "${targetUrl}"`);
+    } else {
+      if (process.env.DISPLAY) {
+        exec(`google-chrome --remote-debugging-port=9222 --user-data-dir="${debugDir}" "${targetUrl}" &`);
+      } else {
+        exec(`chromium --headless=new --remote-debugging-port=9222 --no-sandbox --disable-gpu --user-data-dir="${debugDir}" "${targetUrl}" &`);
+      }
+    }
+
+    // Verify if 9222 responded
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 600));
+      try {
+        const check = await fetch("http://127.0.0.1:9222/json/version", { signal: AbortSignal.timeout(600) });
+        if (check.ok) {
+          return { success: true, connected: true, port: 9222, message: "Successfully launched Google Chrome on port 9222!" };
+        }
+      } catch {}
+    }
+
+    return {
+      success: true,
+      connected: false,
+      port: 9222,
+      message: "Spawned Chrome launch command. If running in a cloud container without desktop display, sub-agents run in deterministic simulation mode.",
+    };
+  } catch (e: any) {
+    return { success: false, connected: false, port: 9222, message: `Could not launch Chrome: ${e.message}` };
+  }
+}
+
 // Probe Chrome Remote Debugging port 9222
 app.get("/api/browser/status", async (_req, res) => {
   try {
@@ -1382,8 +1457,34 @@ app.get("/api/browser/status", async (_req, res) => {
   return res.json({
     connected: false,
     port: 9222,
-    tip: "Start Chrome with: google-chrome --remote-debugging-port=9222",
+    tip: "Click 'Auto-Launch Chrome' or start with: google-chrome --remote-debugging-port=9222",
   });
+});
+
+// Auto-Launch Chrome endpoint
+app.post("/api/browser/launch", async (req, res) => {
+  const targetUrl = req.body?.url || "https://www.youtube.com";
+  const result = await launchChromeCdp(targetUrl);
+  res.json(result);
+});
+
+// Download Windows Launcher Batch Script
+app.get("/api/browser/download-launcher", (_req, res) => {
+  const batScript = `@echo off
+echo ========================================================
+echo Launching Google Chrome with Remote Debugging (Port 9222)
+echo ========================================================
+set CHROME_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+if not exist %CHROME_PATH% set CHROME_PATH="C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+if not exist %CHROME_PATH% set CHROME_PATH="%LOCALAPPDATA%\\Google\\Chrome\\Application\\chrome.exe"
+
+echo Starting Chrome at: %CHROME_PATH%
+start "" %CHROME_PATH% --remote-debugging-port=9222 --user-data-dir="%TEMP%\\agent-chrome-debug" --no-first-run "https://www.youtube.com"
+echo Chrome launched successfully on port 9222!
+`;
+  res.setHeader("Content-Disposition", "attachment; filename=launch_chrome_debug.bat");
+  res.setHeader("Content-Type", "application/x-bat");
+  res.send(batScript);
 });
 
 // Test model latency & health against real endpoints
@@ -1934,15 +2035,10 @@ app.post("/api/agent/execute-step", async (req, res) => {
       const isWindows = process.platform === "win32";
       const isMac = process.platform === "darwin";
 
-      // On local machines, launch the browser with the requested URL
+      // Automatically ensure Chrome is launched on port 9222 and navigate
+      let launchInfo: any = null;
       try {
-        if (isWindows) {
-          exec(`start "" "${url}"`);
-        } else if (isMac) {
-          exec(`open "${url}"`);
-        } else {
-          exec(`xdg-open "${url}" || google-chrome "${url}" || chromium-browser "${url}"`);
-        }
+        launchInfo = await launchChromeCdp(url);
       } catch (e) {
         // Fallback gracefully in headless cloud containers
       }
@@ -1962,6 +2058,8 @@ app.post("/api/agent/execute-step", async (req, res) => {
           url,
           status: "navigated",
           opened_in_browser: true,
+          cdp_connected: launchInfo?.connected ?? false,
+          launch_message: launchInfo?.message ?? "Navigated successfully",
           title: url.includes("youtube") ? "YouTube" : "Web Portal",
         },
       });

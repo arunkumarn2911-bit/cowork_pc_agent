@@ -765,12 +765,12 @@ export default function App() {
             )}
           </div>
 
-          {/* Chrome CDP Status (Clickable for details) */}
+          {/* Chrome CDP Status (Clickable for details and Auto-Launch) */}
           <button
             type="button"
             onClick={() => setIsCdpModalOpen(true)}
             className="cursor-pointer px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 text-xs hidden md:flex items-center gap-1.5 transition-colors group"
-            title="Click to view Chrome DevTools Protocol & Browser Simulation info"
+            title="Click to view Chrome DevTools Protocol & Auto-Launch Chrome"
           >
             <span
               className={`w-2 h-2 rounded-full ${
@@ -780,6 +780,11 @@ export default function App() {
             <span className="text-[11px] font-mono text-slate-300 group-hover:text-white">
               CDP: {chromeStatus.connected ? "9222 Active" : "Simulated"}
             </span>
+            {!chromeStatus.connected && (
+              <span className="text-[9px] font-semibold text-sky-300 bg-sky-500/20 px-1.5 py-0.2 rounded border border-sky-500/30 group-hover:bg-sky-500/30">
+                Auto-Launch
+              </span>
+            )}
             <Info className="w-3 h-3 text-slate-400 group-hover:text-sky-300 ml-0.5" />
           </button>
 
@@ -1123,6 +1128,7 @@ export default function App() {
         isOpen={isCdpModalOpen}
         onClose={() => setIsCdpModalOpen(false)}
         chromeStatus={chromeStatus}
+        onRefreshStatus={fetchSystemStatus}
       />
 
       {/* Framework Self-Healing Modal */}

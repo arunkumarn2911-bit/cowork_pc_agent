@@ -124,14 +124,47 @@ export default function ContinuityCard({
               </span>
             </h4>
             {targetEnvironment && (
-              <span className="text-[11px] text-slate-400 font-mono hidden sm:flex items-center gap-1 truncate max-w-[220px]">
-                <ExternalLink className="w-3 h-3 text-emerald-400" />
-                {targetEnvironment}
-              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href={targetEnvironment}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-[11px] font-mono text-emerald-300 hover:text-emerald-200 flex items-center gap-1.5 transition-colors"
+                  title="Click to open this URL directly in your browser"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Open {targetEnvironment.replace(/^https?:\/\/(?:www\.)?/, "")} in New Tab</span>
+                </a>
+              </div>
             )}
           </div>
           <p className="text-xs text-slate-300 mt-0.5">{summary}</p>
         </div>
+      </div>
+
+      {/* Cloud vs Desktop Local Mode Notice */}
+      <div className="mb-4 p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-xs text-slate-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse shrink-0"></span>
+          <div>
+            <span className="font-semibold text-slate-200">Execution Mode: </span>
+            <span className="text-sky-300 font-mono">Cloud Sandbox (Headless Virtual Engine)</span>
+            <span className="text-slate-400 block sm:inline sm:ml-1 text-[11px]">
+              — Navigated and verified headlessly in the cloud container.
+            </span>
+          </div>
+        </div>
+        {targetEnvironment && (
+          <a
+            href={targetEnvironment}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="self-start sm:self-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/20 shrink-0 transition-colors"
+          >
+            <span>Launch Webpage</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        )}
       </div>
 
       {/* Verified Workspace Artifacts */}

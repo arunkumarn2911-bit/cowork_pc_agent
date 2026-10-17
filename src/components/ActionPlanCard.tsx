@@ -150,8 +150,22 @@ export default function ActionPlanCard({
                       {badge.label}
                     </span>
                   </div>
-                  <div className="text-[11px] font-mono text-slate-400 mt-0.5">
-                    function: <span className="text-indigo-300">{step.function}</span>({JSON.stringify(step.arguments)})
+                  <div className="text-[11px] font-mono text-slate-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                    <span>
+                      function: <span className="text-indigo-300">{step.function}</span>({JSON.stringify(step.arguments)})
+                    </span>
+                    {step.function === "open_url" && step.arguments?.url && (
+                      <a
+                        href={step.arguments.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-sky-400 hover:text-sky-300 underline flex items-center gap-1 font-sans"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span>Open URL</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    )}
                   </div>
                 </div>
               </div>
