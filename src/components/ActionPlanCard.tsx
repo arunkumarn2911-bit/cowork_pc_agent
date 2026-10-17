@@ -95,10 +95,15 @@ export default function ActionPlanCard({
       {targetEnvironment && (
         <div className="mb-3 px-3 py-1.5 rounded-lg bg-slate-950/80 border border-slate-800 text-xs text-slate-300 flex items-center justify-between">
           <span className="text-slate-400">Target Environment:</span>
-          <span className="font-mono text-indigo-300 flex items-center gap-1 truncate max-w-[320px]">
-            {targetEnvironment}
-            <ExternalLink className="w-3 h-3 text-slate-500" />
-          </span>
+          <a
+            href={targetEnvironment}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-indigo-300 hover:text-indigo-200 underline decoration-indigo-500/50 flex items-center gap-1.5 truncate max-w-[340px] transition-colors"
+          >
+            <span>{targetEnvironment}</span>
+            <ExternalLink className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          </a>
         </div>
       )}
 
