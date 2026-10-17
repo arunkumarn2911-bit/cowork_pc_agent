@@ -1,37 +1,18 @@
-# Dependencies
 node_modules/
-.python_packages/
+.aistudio/
 .venv/
-venv/
+.python_packages/
+.healing_backups/
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Build and distribution
 build/
 dist/
 coverage/
-
-# Database and runtime artifacts
-*.db
-*.sqlite
-*.sqlite3
-workflows.db
-
-# Archives and binaries
-*.zip
-*.tar.gz
-*.tgz
-cowork_pc_agent.zip
-
-# Environment and private configs
+.DS_Store
+*.log
 .env*
 !.env.example
 gemini_config.json
 !gemini_config.example.json
-
-# Local backups and cache
-.healing_backups/
-.cache/
-.DS_Store
-*.log
+workflows.db
+cowork_pc_agent.zip

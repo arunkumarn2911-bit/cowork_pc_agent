@@ -221,15 +221,16 @@ export default function App() {
   const [testSuiteRunning, setTestSuiteRunning] = useState(false);
   const [testResultSummary, setTestResultSummary] = useState<string | null>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const scrollToBottom = useCallback(() => {
+    const chatScroll = chatScrollRef.current;
+    chatScroll?.scrollTo({ top: chatScroll.scrollHeight, behavior: "smooth" });
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, scrollToBottom]);
 
   // Initial Fetch: Dynamic Model Discovery (both Gemini API and Ollama) & Browser Status
   const fetchSystemStatus = useCallback(async () => {
@@ -361,6 +362,8 @@ export default function App() {
 
   // Handle Clarification Choice Selection
   const handleClarificationChoice = async (clarifyMsgId: string, choice: string) => {
+    const clarificationId = messages.find((m) => m.id === clarifyMsgId)?.clarification?.id ?? clarifyMsgId;
+
     // Mark card as answered
     setMessages((prev) =>
       prev.map((m) =>
@@ -376,7 +379,7 @@ export default function App() {
       const res = await fetch("/api/agent/clarify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clarification_id: clarifyMsgId, choice }),
+        body: JSON.stringify({ clarification_id: clarificationId, choice }),
       });
       const data = await res.json();
 
@@ -846,7 +849,7 @@ export default function App() {
       )}
 
       {/* Main Container */}
-      <main className="flex-1 flex flex-col max-w-6xl w-full mx-auto p-4 sm:p-6 overflow-hidden">
+      <main className="flex-1 min-h-0 flex flex-col max-w-6xl w-full mx-auto p-4 sm:p-6 overflow-hidden">
         {/* Hub-and-Spoke Sub-Agent Visualizer (Collapsible to maximize conversation space) */}
         <SubAgentRoutingVisualizer
           activeAgent={activeSubAgent}
@@ -860,7 +863,7 @@ export default function App() {
         />
 
         {/* Chat Stream & Conversation Area */}
-        <div className="flex-1 overflow-y-auto pr-1 space-y-4">
+        <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
           {messages.length === 0 ? (
             /* Empty State & Presets */
             <div className="flex flex-col items-center justify-center min-h-[380px] text-center p-6 rounded-2xl bg-slate-900/40 border border-slate-800/80">
@@ -1007,7 +1010,6 @@ export default function App() {
             </div>
           )}
 
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Bar */}

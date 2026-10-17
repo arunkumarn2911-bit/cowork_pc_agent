@@ -1501,6 +1501,8 @@ app.get("/api/agent/subagents", (_req, res) => {
 // Dynamic LLM-Powered Intent Triage & DAG Action Planner
 // -------------------------------------------------------------
 
+const pendingClarifications = new Map<string, { goal: string; createdAt: number }>();
+
 async function decomposeGoalIntoPlan(userGoal: string, modelPhase: ModelPhaseConfig): Promise<{
   isAmbiguous: boolean;
   clarification?: {
@@ -1524,9 +1526,9 @@ async function decomposeGoalIntoPlan(userGoal: string, modelPhase: ModelPhaseCon
 }> {
   const goalLower = userGoal.trim().toLowerCase();
 
-  // Try Real LLM Planning via Gemini API or Ollama first
+  // Try the configured provider first, then use the bounded heuristic planner.
   const apiKey = activeGeminiApiKey;
-  if (apiKey) {
+  if (modelPhase.provider === "ollama" || apiKey) {
     try {
       const systemInstruction = `You are an Autonomous Computer-Use Agent Planner.
 You decompose user instructions into an ordered Action Plan (DAG) using these 4 available sub-agents:
@@ -1549,7 +1551,7 @@ You decompose user instructions into an ordered Action Plan (DAG) using these 4 
    - check_process(name: string)
    - get_system_info()
 
-User Request: "${userGoal.replace(/"/g, '\\"')}"
+User Request (JSON string): ${JSON.stringify(userGoal)}
 
 Determine if the request is excessively vague or requires clarification (e.g. only 1-2 generic words like "start" or "test" with no target).
 If NOT ambiguous, decompose into 4 to 7 realistic steps strictly using the sub-agents and functions listed above.
@@ -1572,69 +1574,105 @@ Respond with JSON matching this exact structure:
   ]
 }`;
 
-      const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
+      let textOut: string | undefined;
+      if (modelPhase.provider === "ollama") {
+        const baseUrl = activeOllamaBaseUrl.replace(/\/$/, "");
+        const resp = await fetch(`${baseUrl}/api/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: systemInstruction }] }],
-            generationConfig: { responseMimeType: "application/json", temperature: 0.1 },
+            model: modelPhase.model,
+            prompt: systemInstruction,
+            format: "json",
+            stream: false,
+            options: { temperature: modelPhase.temperature },
           }),
-          signal: AbortSignal.timeout(9000),
-        }
-      );
-
-      if (resp.ok) {
+          signal: AbortSignal.timeout(30000),
+        });
+        if (!resp.ok) throw new Error(`Ollama planner returned HTTP ${resp.status}`);
+        textOut = (await resp.json()).response;
+      } else {
+        const cleanModel = modelPhase.model.replace(/^models\//, "");
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: systemInstruction }] }],
+              generationConfig: { responseMimeType: "application/json", temperature: modelPhase.temperature },
+            }),
+            signal: AbortSignal.timeout(9000),
+          }
+        );
+        if (!resp.ok) throw new Error(`Gemini planner returned HTTP ${resp.status}`);
         const json = await resp.json();
-        const textOut = json.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (textOut) {
-          const parsed = JSON.parse(textOut);
+        textOut = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      }
+
+      if (!textOut) throw new Error("Planner returned an empty response");
+      {
+        const parsed = JSON.parse(textOut);
+        const modelUsed = { ...modelPhase };
 
           if (parsed.is_ambiguous && parsed.clarification_question && Array.isArray(parsed.clarification_options) && parsed.clarification_options.length > 0) {
             return {
               isAmbiguous: true,
               clarification: {
-                id: `clarify_${Date.now()}`,
-                question: parsed.clarification_question,
-                options: parsed.clarification_options,
+                id: `clarify_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                question: String(parsed.clarification_question),
+                options: parsed.clarification_options
+                  .filter((option: unknown): option is string => typeof option === "string")
+                  .slice(0, 6),
                 allow_custom: true,
               },
-              goalTitle: parsed.goal_title || "Requirement Clarification",
-              summary: parsed.summary || "Please clarify parameters for this workflow.",
-              targetEnvironment: parsed.target_url || "about:blank",
+              goalTitle: String(parsed.goal_title || "Requirement Clarification"),
+              summary: String(parsed.summary || "Please clarify parameters for this workflow."),
+              targetEnvironment: String(parsed.target_url || "about:blank"),
               proposedPlan: [],
-              modelUsed: { ...modelPhase, model: "gemini-3.8-flash" },
+              modelUsed,
             };
           }
 
-          if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-            const formattedSteps = parsed.steps.map((st: any, idx: number) => ({
-              id: `step-${idx + 1}`,
-              agent: ["browser_agent", "data_agent", "filesystem_agent", "system_agent"].includes(st.agent)
-                ? st.agent
-                : "browser_agent",
-              function: st.function || "open_url",
-              arguments: st.arguments || {},
-              description: st.description || `Execute step ${idx + 1}`,
-              risk: (st.risk?.toUpperCase() === "CONSEQUENTIAL" || st.function === "execute_command")
-                ? "CONSEQUENTIAL"
-                : "SAFE",
-            }));
+          if (Array.isArray(parsed.steps) && parsed.steps.length > 0 && parsed.steps.length <= 8) {
+            const allowedFunctions: Record<string, string[]> = {
+              browser_agent: ["open_url", "inspect_dom", "fill_field", "click_element", "take_screenshot"],
+              data_agent: ["extract_structured_fields", "calculate_metrics", "validate_schema"],
+              filesystem_agent: ["save_artifact", "verify_file", "list_workspace"],
+              system_agent: ["execute_command", "check_process", "get_system_info"],
+            };
+            const formattedSteps = parsed.steps.map((st: any, idx: number) => {
+              if (!st || typeof st !== "object" || !allowedFunctions[st.agent]?.includes(st.function)) {
+                throw new Error("Planner returned an unsupported agent action");
+              }
+              if (!st.arguments || typeof st.arguments !== "object" || Array.isArray(st.arguments)) {
+                throw new Error("Planner returned invalid action arguments");
+              }
+              return {
+                id: `step-${idx + 1}`,
+                agent: st.agent as string,
+                function: st.function as string,
+                arguments: st.arguments as Record<string, any>,
+                description: typeof st.description === "string" ? st.description : `Execute step ${idx + 1}`,
+                risk: (st.risk?.toUpperCase() === "CONSEQUENTIAL" || st.function === "execute_command")
+                  ? "CONSEQUENTIAL" as const
+                  : "SAFE" as const,
+              };
+            });
 
             return {
               isAmbiguous: false,
-              goalTitle: parsed.goal_title || userGoal,
-              summary: parsed.summary || `Requirement confirmed: '${userGoal}'. Generated ${formattedSteps.length} steps.`,
-              targetEnvironment: parsed.target_url || "https://www.google.com",
+              goalTitle: String(parsed.goal_title || userGoal),
+              summary: String(parsed.summary || `Requirement confirmed: '${userGoal}'. Generated ${formattedSteps.length} steps.`),
+              targetEnvironment: String(parsed.target_url || "https://www.google.com"),
               proposedPlan: formattedSteps,
-              modelUsed: { ...modelPhase, model: "gemini-3.8-flash" },
+              modelUsed,
             };
           }
-        }
+          throw new Error("Planner response did not contain a valid plan");
       }
     } catch (e: any) {
-      console.warn("[DynamicPlanner] Gemini generation fallback:", e.message);
+      console.warn(`[DynamicPlanner] ${modelPhase.provider} generation fallback:`, e.message);
     }
   }
 
@@ -1820,10 +1858,21 @@ app.post("/api/agent/chat", async (req, res) => {
   const planResult = await decomposeGoalIntoPlan(message.trim(), modelMatrix.planning);
 
   if (planResult.isAmbiguous && planResult.clarification) {
+    const now = Date.now();
+    for (const [id, pending] of pendingClarifications) {
+      if (now - pending.createdAt > 30 * 60 * 1000) pendingClarifications.delete(id);
+    }
+    while (pendingClarifications.size >= 1000) {
+      const oldestId = pendingClarifications.keys().next().value;
+      if (oldestId === undefined) break;
+      pendingClarifications.delete(oldestId);
+    }
+    pendingClarifications.set(planResult.clarification.id, { goal: message.trim(), createdAt: now });
+
     return res.json({
       type: "CLARIFICATION_REQUIRED",
       phase: "clarification",
-      model_used: modelMatrix.clarification,
+      model_used: planResult.modelUsed,
       message: `The LLM detected potential ambiguities in '${message}'. Please confirm your target parameters:`,
       clarification: planResult.clarification,
     });
@@ -1844,9 +1893,22 @@ app.post("/api/agent/chat", async (req, res) => {
 // Clarification Answer Submission
 app.post("/api/agent/clarify", async (req, res) => {
   const { clarification_id, choice } = req.body;
-  const userChoice = (choice || "").trim();
+  if (typeof choice !== "string" || !choice.trim()) {
+    return res.status(400).json({ error: "A clarification choice is required" });
+  }
+  if (typeof clarification_id !== "string") {
+    return res.status(400).json({ error: "A valid clarification ID is required" });
+  }
+  const pending = pendingClarifications.get(clarification_id);
+  if (!pending || Date.now() - pending.createdAt > 30 * 60 * 1000) {
+    pendingClarifications.delete(clarification_id);
+    return res.status(404).json({ error: "Clarification expired; submit the request again" });
+  }
+  pendingClarifications.delete(clarification_id);
+  const userChoice = choice.trim();
+  const clarifiedGoal = `${pending.goal}\n\nUser clarification: ${userChoice}`;
 
-  const planResult = await decomposeGoalIntoPlan(userChoice, modelMatrix.planning);
+  const planResult = await decomposeGoalIntoPlan(clarifiedGoal, modelMatrix.planning);
 
   res.json({
     type: "REQUIREMENTS_CONFIRMED",

@@ -7,9 +7,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 from app.agent.action_schema import _PydanticBaseModel as BaseModel, Field
 
 
@@ -85,10 +86,19 @@ class TaskStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        conn = self._get_connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _init_db(self) -> None:
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workflows (
@@ -120,7 +130,7 @@ class TaskStore:
             conn.commit()
 
     def create_workflow(self, record: WorkflowRecord) -> WorkflowRecord:
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO workflows (
@@ -159,7 +169,7 @@ class TaskStore:
         return record
 
     def get_workflow(self, workflow_id: str) -> Optional[WorkflowRecord]:
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             cursor = conn.execute("SELECT * FROM workflows WHERE workflow_id = ?", (workflow_id,))
             row = cursor.fetchone()
             if not row:
@@ -167,14 +177,14 @@ class TaskStore:
             return self._row_to_record(row)
 
     def list_workflows(self, limit: int = 50) -> List[WorkflowRecord]:
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             cursor = conn.execute("SELECT * FROM workflows ORDER BY updated_at DESC LIMIT ?", (limit,))
             rows = cursor.fetchall()
             return [self._row_to_record(row) for row in rows]
 
     def update_workflow(self, record: WorkflowRecord) -> None:
         record.updated_at = time.time()
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 UPDATE workflows SET
@@ -225,7 +235,7 @@ class TaskStore:
             conn.commit()
 
     def acquire_lock(self, workflow_id: str) -> bool:
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 "UPDATE workflows SET is_locked = 1 WHERE workflow_id = ? AND is_locked = 0",
                 (workflow_id,),
@@ -234,7 +244,7 @@ class TaskStore:
             return cursor.rowcount > 0
 
     def release_lock(self, workflow_id: str) -> None:
-        with self._get_connection() as conn:
+        with self._connection() as conn:
             conn.execute(
                 "UPDATE workflows SET is_locked = 0 WHERE workflow_id = ?",
                 (workflow_id,),
