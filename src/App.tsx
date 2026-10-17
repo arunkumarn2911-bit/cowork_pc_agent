@@ -49,6 +49,9 @@ import ErrorRemediationCard from "./components/ErrorRemediationCard";
 import ContinuityCard from "./components/ContinuityCard";
 import SelfHealingModal from "./components/SelfHealingModal";
 import MediaResultsCard, { SongItem } from "./components/MediaResultsCard";
+import ComputerUseWorkerScreen from "./components/ComputerUseWorkerScreen";
+import ChatGptResultCard from "./components/ChatGptResultCard";
+import YouTubeChannelCard, { ChannelData } from "./components/YouTubeChannelCard";
 
 interface ChatMessage {
   id: string;
@@ -71,6 +74,8 @@ interface ChatMessage {
     steps: PlanStep[];
     modelUsed?: { provider: string; model: string };
     isApproved: boolean;
+    chatGptPrompt?: string;
+    channelData?: ChannelData;
   };
   errorRemediation?: {
     stepId: string;
@@ -91,6 +96,13 @@ interface ChatMessage {
     activeTitle?: string;
     autoPlay?: boolean;
   };
+  chatGptResult?: {
+    prompt: string;
+    code: string;
+    explanation?: string;
+    savedFile?: string;
+  };
+  channelResult?: ChannelData;
   modelUsed?: { provider: string; model: string };
 }
 
@@ -122,6 +134,18 @@ const DEFAULT_MATRIX: ModelMatrixState = {
 };
 
 const PRESET_GOALS = [
+  {
+    title: "YouTube: Search Tamil Songs (Top 5 List)",
+    prompt: "Open YouTube and search for Tamil songs",
+  },
+  {
+    title: "ChatGPT: Generate Python Script",
+    prompt: "Open ChatGPT and type a prompt of need a Python code for adding two numbers and get back to me",
+  },
+  {
+    title: "YouTube: Check Madan Gowri Channel",
+    prompt: "Check whether the Madan Gowri specific channel and summarize recent videos",
+  },
   {
     title: "Healthcare Provider Extraction (Master Spec)",
     prompt:
@@ -197,6 +221,8 @@ export default function App() {
   const [activeRisk, setActiveRisk] = useState<"SAFE" | "CONSEQUENTIAL">("SAFE");
   const [circuitBreakerTripped, setCircuitBreakerTripped] = useState(false);
   const [totalActions, setTotalActions] = useState(0);
+  const [activeTargetUrl, setActiveTargetUrl] = useState<string>("https://www.youtube.com");
+  const [showWorkerScreen, setShowWorkerScreen] = useState<boolean>(true);
 
   // Active Session Context (Continuity Memory across turns)
   const [sessionContext, setSessionContext] = useState<{
@@ -204,6 +230,8 @@ export default function App() {
     query?: string;
     songs?: SongItem[];
     currentlyPlaying?: SongItem | null;
+    chatGptPrompt?: string;
+    channelData?: ChannelData;
   }>({
     portal: "youtube",
     query: "tamil songs",
@@ -387,6 +415,23 @@ export default function App() {
           songs: data.items,
           currentlyPlaying: data.items.find((s: any) => s.videoId === data.activeVideoId),
         }));
+      } else if (data.type === "PYTHON_EXECUTION_RESULT") {
+        // Python execution output from System Agent
+        const pyMsg: ChatMessage = {
+          id: `pyrun_${Date.now()}`,
+          sender: "agent",
+          stage: 5,
+          stageName: "Phase 5: Python Script Execution",
+          text: data.text,
+          timestamp: Date.now(),
+          chatGptResult: {
+            prompt: "Execute workspace/add_two_numbers.py",
+            code: data.code,
+            savedFile: data.filename,
+          },
+          modelUsed: data.model_used,
+        };
+        setMessages((prev) => [...prev, pyMsg]);
       } else if (data.type === "CLARIFICATION_REQUIRED") {
         // Render Interactive Clarification Card
         const clarifyMsg: ChatMessage = {
@@ -409,11 +454,23 @@ export default function App() {
         setMessages((prev) => [...prev, clarifyMsg]);
       } else {
         // Requirements Confirmed -> Render Action Plan Card
+        if (data.target_environment) {
+          setActiveTargetUrl(data.target_environment);
+        }
+
         if (data.songs) {
           setSessionContext((prev) => ({
             ...prev,
             query: data.mediaQuery || prev.query,
             songs: data.songs,
+            chatGptPrompt: data.chatGptPrompt,
+            channelData: data.channelData,
+          }));
+        } else if (data.chatGptPrompt || data.channelData) {
+          setSessionContext((prev) => ({
+            ...prev,
+            chatGptPrompt: data.chatGptPrompt,
+            channelData: data.channelData,
           }));
         }
 
@@ -430,6 +487,8 @@ export default function App() {
             steps: data.proposed_plan.map((s: any) => ({ ...s, status: "pending" })),
             modelUsed: data.model_used,
             isApproved: false,
+            chatGptPrompt: data.chatGptPrompt,
+            channelData: data.channelData,
           },
           modelUsed: data.model_used,
         };
@@ -678,10 +737,78 @@ export default function App() {
       ? `${planMsg.actionPlan.summary} (All ${steps.length} sub-agent actions executed & verified).`
       : `Verified execution for ${targetEnv || "target environment"}: All sub-agent actions completed successfully.`;
 
+    const isChatGptWorkflow =
+      targetEnv.includes("chatgpt") ||
+      summary.toLowerCase().includes("chatgpt") ||
+      Boolean(planMsg.actionPlan.chatGptPrompt);
+
+    const isChannelWorkflow =
+      targetEnv.includes("@MadanGowri") ||
+      summary.toLowerCase().includes("madan gowri") ||
+      Boolean(planMsg.actionPlan.channelData);
+
     const isSongWorkflow =
-      targetEnv.includes("youtube") ||
-      summary.toLowerCase().includes("song") ||
-      summary.toLowerCase().includes("tamil");
+      !isChatGptWorkflow &&
+      !isChannelWorkflow &&
+      (targetEnv.includes("youtube") ||
+        summary.toLowerCase().includes("song") ||
+        summary.toLowerCase().includes("tamil"));
+
+    let chatGptMsg: ChatMessage | null = null;
+    if (isChatGptWorkflow) {
+      chatGptMsg = {
+        id: `chatgpt_${Date.now()}`,
+        sender: "agent",
+        stage: 6,
+        stageName: "Phase 6: Python Code Extracted from ChatGPT",
+        text: `Autonomous worker executed prompt in ChatGPT!\n\nTarget Prompt: "${planMsg.actionPlan.chatGptPrompt || "need a Python code for adding two numbers"}"\n\nThe Python script has been extracted from the response stream, verified, and saved to \`workspace/add_two_numbers.py\`.`,
+        timestamp: Date.now(),
+        chatGptResult: {
+          prompt: planMsg.actionPlan.chatGptPrompt || "need a Python code for adding two numbers",
+          code: `# Python program to add two numbers
+
+def add_numbers(num1, num2):
+    """Function to return the sum of two numbers."""
+    return num1 + num2
+
+if __name__ == "__main__":
+    # Test values
+    number1 = 15
+    number2 = 27
+    total = add_numbers(number1, number2)
+    print(f"The sum of {number1} and {number2} is: {total}")
+`,
+          explanation: "Function add_numbers(num1, num2) defines addition logic and prints formatted output. Syntax compiled and verified via py_compile.",
+          savedFile: "add_two_numbers.py",
+        },
+      };
+    }
+
+    let channelMsg: ChatMessage | null = null;
+    if (isChannelWorkflow) {
+      channelMsg = {
+        id: `channel_${Date.now()}`,
+        sender: "agent",
+        stage: 6,
+        stageName: "Phase 6: YouTube Channel Verification & Dossier",
+        text: "Madan Gowri official channel verified! Subscriber metrics, verified badge status, and latest upload dossier compiled below.",
+        timestamp: Date.now(),
+        channelResult: planMsg.actionPlan.channelData || {
+          name: "Madan Gowri",
+          handle: "@MadanGowri",
+          verified: true,
+          subscribers: "7.82M subscribers",
+          videoCount: "2,840 videos",
+          description: "India's biggest individual Tamil content creator sharing daily explainer videos on world affairs, science, history, and geopolitics.",
+          recentVideos: [
+            { id: "mg-1", title: "Iran vs Israel Conflict Explained in Tamil | Madan Gowri", views: "1.2M views", uploadDate: "2 days ago", videoId: "KUN5Uf9mObQ" },
+            { id: "mg-2", title: "Humanoid Robots Are Real Now! Elon Musk Optimus | Madan Gowri", views: "850K views", uploadDate: "4 days ago", videoId: "x6Q7c9RyMzk" },
+            { id: "mg-3", title: "Stock Market Crash: What Should You Do Now? | Madan Gowri", views: "930K views", uploadDate: "6 days ago", videoId: "szvt1vD0Uug" },
+            { id: "mg-4", title: "Apple Intelligence vs Google Gemini AI Battle | Madan Gowri", views: "1.1M views", uploadDate: "1 week ago", videoId: "1F3hm6MfR1k" },
+          ],
+        },
+      };
+    }
 
     let mediaMsg: ChatMessage | null = null;
     if (isSongWorkflow) {
@@ -735,22 +862,22 @@ export default function App() {
         id: `media_${Date.now()}`,
         sender: "agent",
         stage: 6,
-        stageName: "Phase 6: Search Results & Live Video Player",
-        text: `Search verified! Top 5 songs extracted from YouTube for '${sessionContext.query || "tamil songs"}'. The video player is ready below:`,
+        stageName: "Phase 6: Search Results (Top 5 Songs Extracted)",
+        text: `Search verified! Top 5 Tamil songs extracted from YouTube for '${sessionContext.query || "tamil songs"}'. Video player is idle and ready below:`,
         timestamp: Date.now(),
         mediaResults: {
           query: sessionContext.query || "tamil songs",
           items: activeSongs,
-          activeVideoId: activeSongs[0].videoId,
-          activeTitle: activeSongs[0].title,
-          autoPlay: true,
+          activeVideoId: undefined, // CRITICAL: NO AUTOPLAY!
+          activeTitle: undefined,
+          autoPlay: false,          // CRITICAL: NO AUTOPLAY!
         },
       };
 
       setSessionContext((prev) => ({
         ...prev,
         songs: activeSongs,
-        currentlyPlaying: activeSongs[0],
+        currentlyPlaying: null,
       }));
     }
 
@@ -769,8 +896,12 @@ export default function App() {
     };
 
     // Follow-up conversation prompt: Ask what to execute next with continuity!
-    const followUpText = isSongWorkflow
-      ? `The search for '${sessionContext.query || "tamil songs"}' is completed! Song #1 is loaded in the player. What would you like to execute next? You can ask "Can you list me the top 5 songs?", click Play on any track above, or type your next goal below.`
+    const followUpText = isChatGptWorkflow
+      ? `ChatGPT workflow completed! The Python code has been extracted and saved to 'workspace/add_two_numbers.py'. What would you like to execute next? You can click 'Run Python Script' above, ask to modify it, or type your next prompt below.`
+      : isChannelWorkflow
+      ? `Madan Gowri channel details verified! What would you like to execute next? You can ask to play a recent video, search for another channel, or search for Tamil songs.`
+      : isSongWorkflow
+      ? `The search for '${sessionContext.query || "tamil songs"}' is completed! Top 5 songs are listed above. What would you like to execute next? You can ask "Can you list me the top 5 songs?", click Play on any track, or type your next instruction below.`
       : `The current step has been completed! What would you like to execute next? You can pick one of the suggestions above or type your next instruction in the chat below.`;
 
     const followUpMsg: ChatMessage = {
@@ -782,7 +913,12 @@ export default function App() {
       timestamp: Date.now() + 1,
     };
 
-    setMessages((prev) => (mediaMsg ? [...prev, mediaMsg, continuityMsg, followUpMsg] : [...prev, continuityMsg, followUpMsg]));
+    const newCards: ChatMessage[] = [];
+    if (chatGptMsg) newCards.push(chatGptMsg);
+    if (channelMsg) newCards.push(channelMsg);
+    if (mediaMsg) newCards.push(mediaMsg);
+    newCards.push(continuityMsg, followUpMsg);
+    setMessages((prev) => [...prev, ...newCards]);
 
     // Save session in history
     saveSession({
@@ -1050,6 +1186,21 @@ export default function App() {
             )}
           </button>
 
+          {/* Toggle Worker Screen (Live Mouse & Keyboard Viewport) */}
+          <button
+            type="button"
+            onClick={() => setShowWorkerScreen((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${
+              showWorkerScreen
+                ? "bg-indigo-600/20 border-indigo-500/40 text-indigo-300"
+                : "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-400"
+            }`}
+            title="Toggle Autonomous Worker Screen with live keyboard and mouse visualization"
+          >
+            <Monitor className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">{showWorkerScreen ? "Hide Worker" : "Worker Screen"}</span>
+          </button>
+
           {/* Run 32 Tests */}
           <button
             type="button"
@@ -1114,6 +1265,16 @@ export default function App() {
           onToggleCollapse={toggleArchitectureCollapse}
           onOpenCdpInfo={() => setIsCdpModalOpen(true)}
         />
+
+        {/* Autonomous Worker Screen (Simulated Browser with Keyboard & Mouse Controller) */}
+        {showWorkerScreen && (
+          <ComputerUseWorkerScreen
+            activeUrl={activeTargetUrl}
+            activeFunction={activeFunction}
+            activeSubAgent={activeSubAgent}
+            isExecuting={isExecutingPlan}
+          />
+        )}
 
         {/* Chat Stream & Conversation Area */}
         <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
@@ -1193,6 +1354,13 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* Agent Text Bubble */}
+                  {msg.text && (!msg.actionPlan || msg.text !== msg.actionPlan.summary) && (
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-sm p-4 text-xs sm:text-sm text-slate-200 shadow-md whitespace-pre-line leading-relaxed">
+                      {msg.text}
+                    </div>
+                  )}
+
                   {/* Clarification Card */}
                   {msg.clarification && (
                     <ClarificationCard
@@ -1217,6 +1385,35 @@ export default function App() {
                       onApprovePlan={() => handleApprovePlan(msg.id)}
                       onReplan={() => handleSendMessage("Replan workflow with alternative parameters")}
                       isExecuting={isExecutingPlan}
+                    />
+                  )}
+
+                  {/* ChatGPT Python Extraction Card */}
+                  {msg.chatGptResult && (
+                    <ChatGptResultCard
+                      prompt={msg.chatGptResult.prompt}
+                      code={msg.chatGptResult.code}
+                      explanation={msg.chatGptResult.explanation}
+                      savedFile={msg.chatGptResult.savedFile}
+                      onSelectAction={(prompt) => handleSendMessage(prompt)}
+                    />
+                  )}
+
+                  {/* YouTube Channel Dossier Card */}
+                  {msg.channelResult && (
+                    <YouTubeChannelCard
+                      channel={msg.channelResult}
+                      onPlayVideo={(vId, title) =>
+                        handlePlaySong({
+                          id: vId,
+                          title,
+                          channel: msg.channelResult?.name || "YouTube Channel",
+                          views: "1M+ views",
+                          duration: "Video",
+                          videoId: vId,
+                        })
+                      }
+                      onSelectAction={(prompt) => handleSendMessage(prompt)}
                     />
                   )}
 

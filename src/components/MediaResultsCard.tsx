@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Play,
   Pause,
@@ -39,11 +39,19 @@ export default function MediaResultsCard({
   onSelectAction,
 }: MediaResultsCardProps) {
   const [playingVideoId, setPlayingVideoId] = useState<string | undefined>(
-    initialActiveVideoId || (autoPlay && items.length > 0 ? items[0].videoId : undefined)
+    initialActiveVideoId || (autoPlay ? items[0]?.videoId : undefined)
   );
   const [playingTitle, setPlayingTitle] = useState<string | undefined>(
-    initialActiveTitle || (autoPlay && items.length > 0 ? items[0].title : undefined)
+    initialActiveTitle || (autoPlay ? items[0]?.title : undefined)
   );
+
+  // Sync state if initialActiveVideoId changes externally
+  useEffect(() => {
+    if (initialActiveVideoId) {
+      setPlayingVideoId(initialActiveVideoId);
+      setPlayingTitle(initialActiveTitle || "Selected Song");
+    }
+  }, [initialActiveVideoId, initialActiveTitle]);
 
   const handlePlayClick = (song: SongItem) => {
     setPlayingVideoId(song.videoId);
@@ -86,7 +94,7 @@ export default function MediaResultsCard({
       </div>
 
       {/* Embedded Video Player if active */}
-      {playingVideoId && (
+      {playingVideoId ? (
         <div className="mb-4 bg-slate-950 rounded-xl p-3 border border-indigo-500/30">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400">
@@ -112,6 +120,16 @@ export default function MediaResultsCard({
               allowFullScreen
             />
           </div>
+        </div>
+      ) : (
+        <div className="mb-4 bg-slate-950/80 rounded-xl p-3 border border-slate-800 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-slate-300">
+            <Volume2 className="w-4 h-4 text-slate-500" />
+            <span>Video player is <strong>idle</strong>. Click <strong>Play</strong> on any song below or instruct <em>&ldquo;Play #1&rdquo;</em> to start.</span>
+          </div>
+          <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+            User-Controlled Playback
+          </span>
         </div>
       )}
 
