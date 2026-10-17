@@ -49,11 +49,30 @@ export default function ContinuityCard({
     },
   ];
 
-  if (envLower.includes("youtube")) {
+  if (envLower.includes("tamil") || envLower.includes("song") || envLower.includes("music")) {
     dynamicSuggestions = [
       {
-        label: "Search YouTube for 'autonomous AI agents'",
-        prompt: "On YouTube, type 'autonomous AI agents' in the search bar, click search, and inspect the results.",
+        label: "▶ Play Song #1 (Arabic Kuthu)",
+        prompt: "Play the first song: Arabic Kuthu",
+      },
+      {
+        label: "📋 List Top 5 Songs with details",
+        prompt: "Can you list me the list of the top five songs?",
+      },
+      {
+        label: "▶ Play Song #2 (Rowdy Baby)",
+        prompt: "Play song #2: Rowdy Baby",
+      },
+      {
+        label: "🔍 Search Tamil Melody Songs",
+        prompt: "Search YouTube for Tamil melody songs and extract results",
+      },
+    ];
+  } else if (envLower.includes("youtube")) {
+    dynamicSuggestions = [
+      {
+        label: "Search for Tamil songs",
+        prompt: "Search YouTube for 'tamil songs' and extract results",
       },
       {
         label: "Extract top 5 video titles & channels",
