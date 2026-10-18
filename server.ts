@@ -2012,7 +2012,14 @@ Respond with JSON matching this exact structure:
     jsonArtifact = `${location.toLowerCase().replace(/\s+/g, "_")}_weather.json`;
     pngArtifact = `${location.toLowerCase().replace(/\s+/g, "_")}_weather_result.png`;
     targetQuery = `weather in ${location}`;
-  } else if (goalLower.includes("youtube") || goalLower.includes("song") || goalLower.includes("music") || goalLower.includes("video") || activeContext?.portal === "youtube") {
+  } else if (goalLower.includes("tradingview") || goalLower.includes("trading view") || goalLower.includes("aapl") || goalLower.includes("stock") || goalLower.includes("chart")) {
+    targetUrl = "https://www.tradingview.com/chart/AAPL";
+    searchSelector = "#symbol-search";
+    buttonSelector = "#btn-load-symbol";
+    jsonArtifact = "tradingview_chart_analysis.json";
+    pngArtifact = "tradingview_1d_chart.png";
+    targetQuery = "AAPL 1D Indicators";
+  } else if (goalLower.includes("youtube") || goalLower.includes("song") || goalLower.includes("music") || goalLower.includes("video") || ((goalLower.includes("play") || goalLower.includes("listen")) && activeContext?.portal === "youtube")) {
     const cleanQ = goalLower.replace(/\b(can|open|chrome|and|youtube|to|for|search|find)\b/gi, "").trim();
     targetQuery = cleanQ || (activeContext?.query ? activeContext.query : "tamil songs");
     targetUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(targetQuery)}`;
@@ -2035,13 +2042,6 @@ Respond with JSON matching this exact structure:
     jsonArtifact = "wikipedia_article.json";
     pngArtifact = "wikipedia_view.png";
     targetQuery = goalLower.replace(/can|open|chrome|and|wikipedia|to|for/g, "").trim() || "Artificial Intelligence";
-  } else if (goalLower.includes("tradingview") || goalLower.includes("aapl") || goalLower.includes("stock")) {
-    targetUrl = "https://www.tradingview.com/chart/AAPL";
-    searchSelector = "#symbol-search";
-    buttonSelector = "#btn-load-symbol";
-    jsonArtifact = "aapl_chart_analysis.json";
-    pngArtifact = "aapl_1d_chart.png";
-    targetQuery = "AAPL 1D Indicators";
   } else if (goalLower.includes("sec") || goalLower.includes("edgar") || goalLower.includes("10-k")) {
     targetUrl = "https://www.sec.gov/edgar/searchedgar/companysearch";
     searchSelector = "#search-input";
@@ -2397,6 +2397,275 @@ app.post("/api/agent/chat", async (req, res) => {
         });
         resolve();
       });
+    });
+  }
+
+  // 1. User Cancellation ("no", "cancel", "no cancel", "don't open")
+  const isCancellation =
+    lowerMsg === "no" ||
+    lowerMsg === "cancel" ||
+    lowerMsg === "no, cancel" ||
+    lowerMsg === "no cancel" ||
+    lowerMsg === "stop" ||
+    lowerMsg === "don't open" ||
+    lowerMsg.startsWith("no,") ||
+    lowerMsg.startsWith("no ");
+
+  if (isCancellation && (activeContext?.pendingConfirmationName || activeContext?.pendingConfirmationUrl)) {
+    return res.json({
+      type: "ACTION_CANCELLED",
+      phase: "clarification",
+      text: "Action cancelled. What portal or task would you like to explore next?",
+      summary: "Action cancelled.",
+      suggestions: ["Open TradingView", "Open YouTube", "Check Chennai weather"],
+    });
+  }
+
+  // 2. User Affirmative Confirmation ("yes", "sure", "open it", "confirm") to open a pending portal
+  const isAffirmative =
+    lowerMsg === "yes" ||
+    lowerMsg === "yep" ||
+    lowerMsg === "yeah" ||
+    lowerMsg === "sure" ||
+    lowerMsg === "ok" ||
+    lowerMsg === "okay" ||
+    lowerMsg === "open it" ||
+    lowerMsg === "open" ||
+    lowerMsg === "confirm" ||
+    lowerMsg === "proceed" ||
+    lowerMsg === "do it" ||
+    lowerMsg.startsWith("yes, open") ||
+    lowerMsg.startsWith("yes open") ||
+    lowerMsg.startsWith("yes,") ||
+    lowerMsg.startsWith("yes ");
+
+  // Identify which portal is being confirmed (from message text, activeContext, or recent chat history)
+  const recentHistoryAgentText = (Array.isArray(history) ? history : [])
+    .slice()
+    .reverse()
+    .find((h: any) => h?.sender === "agent")?.text?.toLowerCase() || "";
+
+  let portalToConfirm = activeContext?.pendingConfirmationName;
+  let urlToConfirm = activeContext?.pendingConfirmationUrl;
+
+  if (lowerMsg.includes("tradingview") || lowerMsg.includes("trading view")) {
+    portalToConfirm = "TradingView";
+    urlToConfirm = "https://www.tradingview.com";
+  } else if (lowerMsg.includes("youtube")) {
+    portalToConfirm = "YouTube";
+    urlToConfirm = "https://www.youtube.com";
+  } else if (!portalToConfirm) {
+    if (recentHistoryAgentText.includes("tradingview")) {
+      portalToConfirm = "TradingView";
+      urlToConfirm = "https://www.tradingview.com";
+    } else if (recentHistoryAgentText.includes("youtube")) {
+      portalToConfirm = "YouTube";
+      urlToConfirm = "https://www.youtube.com";
+    } else if (recentHistoryAgentText.includes("chatgpt")) {
+      portalToConfirm = "ChatGPT";
+      urlToConfirm = "https://chatgpt.com";
+    } else if (recentHistoryAgentText.includes("google")) {
+      portalToConfirm = "Google";
+      urlToConfirm = "https://www.google.com";
+    }
+  }
+
+  if (isAffirmative && (portalToConfirm || activeContext?.portal)) {
+    const portal = portalToConfirm || (activeContext?.portal === "tradingview" ? "TradingView" : activeContext?.portal === "youtube" ? "YouTube" : "Web Portal");
+    const targetUrl = urlToConfirm || (portal === "TradingView" ? "https://www.tradingview.com" : portal === "YouTube" ? "https://www.youtube.com" : "https://www.google.com");
+
+    try {
+      launchChromeCdp(targetUrl).catch(() => null);
+    } catch {}
+
+    const isTv = portal.toLowerCase().includes("tradingview");
+    const isYt = portal.toLowerCase().includes("youtube");
+    const isGpt = portal.toLowerCase().includes("chatgpt");
+
+    const text = isTv
+      ? `I have opened TradingView, what's the next step?`
+      : isYt
+      ? `I have opened YouTube, what's the next step?`
+      : isGpt
+      ? `I have opened ChatGPT, what's the next step?`
+      : `I have opened ${portal}, what's the next step?`;
+
+    const suggestions = isTv
+      ? ["Search for AAPL chart", "Search for BTC/USD", "Inspect RSI & MACD indicators", "Open YouTube instead"]
+      : isYt
+      ? ["Search for Tamil songs", "Play top trending song", "Check Madan Gowri channel", "Open TradingView instead"]
+      : isGpt
+      ? ["Write a Python code for adding two numbers", "Ask for a web scraper", "Open TradingView instead"]
+      : ["Navigate to next page", "Inspect DOM elements", "Take a screenshot"];
+
+    const dagSteps = isTv
+      ? [
+          {
+            id: "step-1",
+            agent: "browser_agent",
+            function: "open_url",
+            arguments: { url: targetUrl },
+            description: `Launch browser and navigate to TradingView (${targetUrl})`,
+            risk: "SAFE" as const,
+          },
+          {
+            id: "step-2",
+            agent: "browser_agent",
+            function: "inspect_dom",
+            arguments: { selector: "#symbol-search" },
+            description: "Inspect candlestick charting workspace, symbol search, and technical indicators",
+            risk: "SAFE" as const,
+          },
+        ]
+      : [
+          {
+            id: "step-1",
+            agent: "browser_agent",
+            function: "open_url",
+            arguments: { url: targetUrl },
+            description: `Launch browser and navigate to ${portal} (${targetUrl})`,
+            risk: "SAFE" as const,
+          },
+          {
+            id: "step-2",
+            agent: "browser_agent",
+            function: "inspect_dom",
+            arguments: { selector: portal === "YouTube" ? "input#search" : "textarea[name='q']" },
+            description: `Inspect active DOM view and input elements on ${portal}`,
+            risk: "SAFE" as const,
+          },
+        ];
+
+    return res.json({
+      type: "PORTAL_OPENED",
+      phase: "execution",
+      portal,
+      target_environment: targetUrl,
+      text,
+      summary: text,
+      suggestions,
+      proposed_plan: dagSteps,
+    });
+  }
+
+  // 3. Interactive Navigation Intent: "Can you open TradingView?", "search for TradingView", "open YouTube", etc.
+  const isTradingViewQuery =
+    lowerMsg.includes("tradingview") ||
+    lowerMsg.includes("trading view") ||
+    ((lowerMsg.includes("stock") || lowerMsg.includes("trade")) && (lowerMsg.includes("open") || lowerMsg.includes("chart") || lowerMsg.includes("search") || lowerMsg.includes("can you")));
+
+  const isYouTubeOpenQuery =
+    (lowerMsg.includes("youtube") || lowerMsg.includes("you tube")) &&
+    (lowerMsg.includes("open") || lowerMsg.includes("can you") || lowerMsg.includes("launch") || lowerMsg.includes("go to") || lowerMsg.includes("search")) &&
+    !lowerMsg.includes("song") && !lowerMsg.includes("play");
+
+  const isChatGptOpenQuery =
+    (lowerMsg.includes("chatgpt") || lowerMsg.includes("chat gpt") || lowerMsg.includes("openai")) &&
+    (lowerMsg.includes("open") || lowerMsg.includes("can you") || lowerMsg.includes("launch") || lowerMsg.includes("go to")) &&
+    !lowerMsg.includes("python") && !lowerMsg.includes("prompt of");
+
+  const isGoogleOpenQuery =
+    lowerMsg.includes("google") &&
+    (lowerMsg.includes("open") || lowerMsg.includes("can you") || lowerMsg.includes("launch")) &&
+    !lowerMsg.includes("weather");
+
+  if (isTradingViewQuery || isYouTubeOpenQuery || isChatGptOpenQuery || isGoogleOpenQuery) {
+    let portal = "TradingView";
+    let targetUrl = "https://www.tradingview.com";
+    let question = "Do you want to open TradingView URL (https://www.tradingview.com)?";
+
+    if (isYouTubeOpenQuery) {
+      portal = "YouTube";
+      targetUrl = "https://www.youtube.com";
+      question = "Do you want to open YouTube URL?";
+    } else if (isChatGptOpenQuery) {
+      portal = "ChatGPT";
+      targetUrl = "https://chatgpt.com";
+      question = "Do you want to open ChatGPT URL (https://chatgpt.com)?";
+    } else if (isGoogleOpenQuery) {
+      portal = "Google";
+      targetUrl = "https://www.google.com";
+      question = "Do you want to open Google URL (https://www.google.com)?";
+    }
+
+    return res.json({
+      type: "CONFIRM_OPEN_PORTAL",
+      phase: "clarification",
+      portal,
+      target_environment: targetUrl,
+      text: question,
+      question,
+      options: [
+        `Yes, open ${portal}`,
+        "No, cancel",
+      ],
+      proposed_plan: [
+        {
+          id: "step-1",
+          agent: "browser_agent",
+          function: "open_url",
+          arguments: { url: targetUrl },
+          description: `Launch Chrome browser and navigate to ${portal} platform`,
+          risk: "SAFE" as const,
+        },
+        {
+          id: "step-2",
+          agent: "browser_agent",
+          function: "inspect_dom",
+          arguments: { selector: portal === "TradingView" ? "#symbol-search" : portal === "YouTube" ? "input#search" : "textarea[name='q']" },
+          description: `Inspect active DOM view and input elements on ${portal}`,
+          risk: "SAFE" as const,
+        },
+      ],
+    });
+  }
+
+  // 4. Active TradingView Continuity Actions (e.g., "search for AAPL", "look up BTC", "check indicators")
+  const isTradingViewSession = activeContext?.portal?.toLowerCase() === "tradingview" || activeContext?.targetUrl?.includes("tradingview");
+  if (isTradingViewSession && (lowerMsg.includes("aapl") || lowerMsg.includes("btc") || lowerMsg.includes("tsla") || lowerMsg.includes("nvda") || lowerMsg.includes("search") || lowerMsg.includes("chart") || lowerMsg.includes("indicator"))) {
+    let ticker = "AAPL";
+    if (lowerMsg.includes("btc") || lowerMsg.includes("bitcoin")) ticker = "BTCUSD";
+    else if (lowerMsg.includes("tsla") || lowerMsg.includes("tesla")) ticker = "TSLA";
+    else if (lowerMsg.includes("nvda") || lowerMsg.includes("nvidia")) ticker = "NVDA";
+    else if (lowerMsg.includes("msft") || lowerMsg.includes("microsoft")) ticker = "MSFT";
+    else {
+      const match = rawMsg.match(/\b([A-Za-z]{2,5})\b/);
+      if (match && !["for", "and", "the", "can", "you", "view", "open", "show"].includes(match[1].toLowerCase())) {
+        ticker = match[1].toUpperCase();
+      }
+    }
+    const chartUrl = `https://www.tradingview.com/chart/${ticker}`;
+    return res.json({
+      type: "PORTAL_ACTION_CONTINUITY",
+      phase: "execution",
+      portal: "TradingView",
+      target_environment: chartUrl,
+      text: `I have updated TradingView to show the **${ticker}** chart with technical indicators. What's the next step?`,
+      summary: `TradingView chart loaded for ${ticker}.`,
+      suggestions: [
+        `Inspect ${ticker} RSI (14) & MACD`,
+        "Look up Bitcoin (BTCUSD)",
+        "Look up Tesla (TSLA)",
+        "Open YouTube instead",
+      ],
+      proposed_plan: [
+        {
+          id: "step-1",
+          agent: "browser_agent",
+          function: "fill_field",
+          arguments: { selector: "#symbol-search", text: ticker },
+          description: `Enter ticker symbol ${ticker} into TradingView search bar`,
+          risk: "SAFE" as const,
+        },
+        {
+          id: "step-2",
+          agent: "browser_agent",
+          function: "click_element",
+          arguments: { selector: "#btn-load-symbol" },
+          description: `Load dynamic candlestick chart and technical indicators for ${ticker}`,
+          risk: "SAFE" as const,
+        },
+      ],
     });
   }
 

@@ -105,5 +105,13 @@ export interface ChatMessage {
     explanation?: string;
     savedFile?: string;
   };
+  portalConfirmation?: {
+    portal: string;
+    url: string;
+    question: string;
+    options: string[];
+    confirmed?: boolean;
+  };
+  continuityOptions?: string[];
   modelUsed?: { provider: string; model: string };
 }

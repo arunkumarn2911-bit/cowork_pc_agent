@@ -113,6 +113,14 @@ interface ChatMessage {
     savedFile?: string;
   };
   channelResult?: ChannelData;
+  portalConfirmation?: {
+    portal: string;
+    url: string;
+    question: string;
+    options: string[];
+    confirmed?: boolean;
+  };
+  continuityOptions?: string[];
   modelUsed?: { provider: string; model: string };
 }
 
@@ -145,6 +153,18 @@ const DEFAULT_MATRIX: ModelMatrixState = {
 
 const PRESET_GOALS = [
   {
+    title: "TradingView: Interactive Open & Chart",
+    prompt: "Can you open TradingView?",
+  },
+  {
+    title: "YouTube: Interactive Open",
+    prompt: "Can you open YouTube?",
+  },
+  {
+    title: "Weather in Chennai (Google Search)",
+    prompt: "What is the weather in Chennai?",
+  },
+  {
     title: "YouTube: Search Tamil Songs (Top 5 List)",
     prompt: "Open YouTube and search for Tamil songs",
   },
@@ -162,22 +182,9 @@ const PRESET_GOALS = [
       "Open the specified website https://medical-registry.internal/providers, search for Dr. Sarah Jenkins, open the matching record, extract its name, address and status, save a screenshot and JSON result in my workspace, verify the saved files, and summarize the result.",
   },
   {
-    title: "TradingView Chart & Indicators",
-    prompt:
-      "Open https://www.tradingview.com/chart/AAPL, inspect technical indicators on 1D timeframe, capture chart screenshot, extract moving averages and RSI values, save JSON to workspace, and verify evidence.",
-  },
-  {
     title: "SEC EDGAR Microsoft 10-K Retrieval",
     prompt:
       "Navigate to EDGAR search, locate the latest 10-K annual report for Microsoft Corporation, extract total revenue and operating income, save balance sheet summary to workspace JSON, and produce verified report.",
-  },
-  {
-    title: "Test Clarification Card (Ambiguous Request)",
-    prompt: "Analyze AAPL on TradingView",
-  },
-  {
-    title: "Simulate Python Error & Remediation",
-    prompt: "Clean workspace cache and test circuit breaker failure recovery",
   },
 ];
 
@@ -242,12 +249,17 @@ export default function App() {
     currentlyPlaying?: SongItem | null;
     chatGptPrompt?: string;
     channelData?: ChannelData;
+    pendingConfirmationName?: string;
+    pendingConfirmationUrl?: string;
   }>({
     portal: "youtube",
     query: "tamil songs",
     songs: [],
     currentlyPlaying: null,
   });
+
+  // Background Worker Sub-Agent DAG steps (shown on the Autonomous Worker Screen)
+  const [workerDagSteps, setWorkerDagSteps] = useState<PlanStep[]>([]);
 
   // Drawer, Modals & Tests
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -468,10 +480,111 @@ export default function App() {
           modelUsed: data.model_used,
         };
         setMessages((prev) => [...prev, clarifyMsg]);
+      } else if (data.type === "CONFIRM_OPEN_PORTAL") {
+        // Natural language confirmation prompt without dumping DAG plan into chat
+        if (data.target_environment) {
+          setActiveTargetUrl(data.target_environment);
+        }
+        if (data.proposed_plan) {
+          setWorkerDagSteps(data.proposed_plan);
+        }
+        setSessionContext((prev) => ({
+          ...prev,
+          portal: data.portal?.toLowerCase(),
+          pendingConfirmationName: data.portal,
+          pendingConfirmationUrl: data.target_environment,
+        }));
+
+        const confirmMsg: ChatMessage = {
+          id: `confirm_${Date.now()}`,
+          sender: "agent",
+          stage: 1,
+          stageName: "Phase 1: Conversational Intent Clarification",
+          text: data.text || data.question,
+          timestamp: Date.now(),
+          portalConfirmation: {
+            portal: data.portal,
+            url: data.target_environment,
+            question: data.question || `Do you want to open ${data.portal} URL?`,
+            options: data.options || [`Yes, open ${data.portal}`, "No, cancel"],
+            confirmed: false,
+          },
+          modelUsed: data.model_used,
+        };
+        setMessages((prev) => [...prev, confirmMsg]);
+      } else if (data.type === "PORTAL_OPENED") {
+        // Portal opened with conversational continuity
+        if (data.target_environment) {
+          setActiveTargetUrl(data.target_environment);
+        }
+        if (data.proposed_plan) {
+          setWorkerDagSteps(data.proposed_plan);
+        }
+        setSessionContext((prev) => ({
+          ...prev,
+          portal: data.portal?.toLowerCase(),
+          pendingConfirmationName: undefined,
+          pendingConfirmationUrl: undefined,
+        }));
+
+        // Brief autonomous worker screen animation trigger
+        setIsExecutingPlan(true);
+        setTimeout(() => setIsExecutingPlan(false), 900);
+
+        const openedMsg: ChatMessage = {
+          id: `opened_${Date.now()}`,
+          sender: "agent",
+          stage: 2,
+          stageName: "Phase 2: Target Portal Activated",
+          text: data.text || `I have opened ${data.portal}, what's the next step?`,
+          timestamp: Date.now(),
+          continuityOptions: data.suggestions,
+          modelUsed: data.model_used,
+        };
+        setMessages((prev) => [...prev, openedMsg]);
+      } else if (data.type === "PORTAL_ACTION_CONTINUITY") {
+        // Follow-up search or interaction within active portal
+        if (data.target_environment) {
+          setActiveTargetUrl(data.target_environment);
+        }
+        if (data.proposed_plan) {
+          setWorkerDagSteps(data.proposed_plan);
+        }
+        setIsExecutingPlan(true);
+        setTimeout(() => setIsExecutingPlan(false), 900);
+
+        const contMsg: ChatMessage = {
+          id: `cont_${Date.now()}`,
+          sender: "agent",
+          stage: 3,
+          stageName: "Phase 3: Active Viewport Updated",
+          text: data.text,
+          timestamp: Date.now(),
+          continuityOptions: data.suggestions,
+          modelUsed: data.model_used,
+        };
+        setMessages((prev) => [...prev, contMsg]);
+      } else if (data.type === "ACTION_CANCELLED") {
+        setSessionContext((prev) => ({
+          ...prev,
+          pendingConfirmationName: undefined,
+          pendingConfirmationUrl: undefined,
+        }));
+        const cancelMsg: ChatMessage = {
+          id: `cancel_${Date.now()}`,
+          sender: "agent",
+          text: data.text || "Action cancelled. What would you like to explore next?",
+          timestamp: Date.now(),
+          continuityOptions: data.suggestions,
+        };
+        setMessages((prev) => [...prev, cancelMsg]);
       } else {
         // Requirements Confirmed -> Render Action Plan Card
         if (data.target_environment) {
           setActiveTargetUrl(data.target_environment);
+        }
+        if (data.proposed_plan) {
+          setWorkerDagSteps(data.proposed_plan);
         }
 
         if (data.songs) {
@@ -523,6 +636,18 @@ export default function App() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // Handle Natural Language Portal Confirmation Choice
+  const handleConfirmPortal = (msgId: string, choice: string) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.portalConfirmation
+          ? { ...m, portalConfirmation: { ...m.portalConfirmation, confirmed: true } }
+          : m
+      )
+    );
+    handleSendMessage(choice);
   };
 
   // Handle Clarification Choice Selection
@@ -1388,6 +1513,7 @@ if __name__ == "__main__":
             activeFunction={activeFunction}
             activeSubAgent={activeSubAgent}
             isExecuting={isExecutingPlan}
+            dagSteps={workerDagSteps}
           />
         )}
 
@@ -1473,6 +1599,60 @@ if __name__ == "__main__":
                   {msg.text && (!msg.actionPlan || msg.text !== msg.actionPlan.summary) && (
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-sm p-4 text-xs sm:text-sm text-slate-200 shadow-md whitespace-pre-line leading-relaxed">
                       {msg.text}
+                    </div>
+                  )}
+
+                  {/* Portal Confirmation Card (Natural Language Prompt without DAG plan clutter) */}
+                  {msg.portalConfirmation && (
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shrink-0">
+                          <Globe className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <p className="text-xs sm:text-sm font-semibold text-slate-100">
+                            {msg.portalConfirmation.question}
+                          </p>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            Target Portal: {msg.portalConfirmation.url}
+                          </span>
+                        </div>
+                      </div>
+
+                      {!msg.portalConfirmation.confirmed && (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {msg.portalConfirmation.options.map((option, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => handleConfirmPortal(msg.id, option)}
+                              className={`px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                                idx === 0
+                                  ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-600/30 font-semibold"
+                                  : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+                              }`}
+                            >
+                              {option}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Continuity Quick-Action Chips */}
+                  {msg.continuityOptions && msg.continuityOptions.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {msg.continuityOptions.map((opt, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleSendMessage(opt)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-[11px] text-slate-300 hover:text-white transition-colors"
+                        >
+                          {opt}
+                        </button>
+                      ))}
                     </div>
                   )}
 
