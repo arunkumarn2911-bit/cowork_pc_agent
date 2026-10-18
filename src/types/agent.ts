@@ -112,6 +112,10 @@ export interface ChatMessage {
     options: string[];
     confirmed?: boolean;
   };
+  openRealUrl?: {
+    url: string;
+    label: string;
+  };
   continuityOptions?: string[];
   modelUsed?: { provider: string; model: string };
 }

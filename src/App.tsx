@@ -44,12 +44,11 @@ import ModelMatrixModal, { ModelMatrixState, GeminiModelItem } from "./component
 import SubAgentRoutingVisualizer from "./components/SubAgentRoutingVisualizer";
 import CdpExplainerModal from "./components/CdpExplainerModal";
 import ClarificationCard from "./components/ClarificationCard";
-import ActionPlanCard, { PlanStep } from "./components/ActionPlanCard";
+import { PlanStep } from "./types/agent";
 import ErrorRemediationCard from "./components/ErrorRemediationCard";
 import ContinuityCard from "./components/ContinuityCard";
 import SelfHealingModal from "./components/SelfHealingModal";
 import MediaResultsCard, { SongItem } from "./components/MediaResultsCard";
-import ComputerUseWorkerScreen from "./components/ComputerUseWorkerScreen";
 import ChatGptResultCard from "./components/ChatGptResultCard";
 import YouTubeChannelCard, { ChannelData } from "./components/YouTubeChannelCard";
 import WeatherResultCard from "./components/WeatherResultCard";
@@ -119,6 +118,10 @@ interface ChatMessage {
     question: string;
     options: string[];
     confirmed?: boolean;
+  };
+  openRealUrl?: {
+    url: string;
+    label: string;
   };
   continuityOptions?: string[];
   modelUsed?: { provider: string; model: string };
@@ -238,8 +241,7 @@ export default function App() {
   const [activeRisk, setActiveRisk] = useState<"SAFE" | "CONSEQUENTIAL">("SAFE");
   const [circuitBreakerTripped, setCircuitBreakerTripped] = useState(false);
   const [totalActions, setTotalActions] = useState(0);
-  const [activeTargetUrl, setActiveTargetUrl] = useState<string>("https://www.youtube.com");
-  const [showWorkerScreen, setShowWorkerScreen] = useState<boolean>(true);
+  const [activeTargetUrl, setActiveTargetUrl] = useState<string>("https://www.google.com");
 
   // Active Session Context (Continuity Memory across turns)
   const [sessionContext, setSessionContext] = useState<{
@@ -252,14 +254,9 @@ export default function App() {
     pendingConfirmationName?: string;
     pendingConfirmationUrl?: string;
   }>({
-    portal: "youtube",
-    query: "tamil songs",
     songs: [],
     currentlyPlaying: null,
   });
-
-  // Background Worker Sub-Agent DAG steps (shown on the Autonomous Worker Screen)
-  const [workerDagSteps, setWorkerDagSteps] = useState<PlanStep[]>([]);
 
   // Drawer, Modals & Tests
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -485,9 +482,6 @@ export default function App() {
         if (data.target_environment) {
           setActiveTargetUrl(data.target_environment);
         }
-        if (data.proposed_plan) {
-          setWorkerDagSteps(data.proposed_plan);
-        }
         setSessionContext((prev) => ({
           ...prev,
           portal: data.portal?.toLowerCase(),
@@ -513,13 +507,16 @@ export default function App() {
         };
         setMessages((prev) => [...prev, confirmMsg]);
       } else if (data.type === "PORTAL_OPENED") {
-        // Portal opened with conversational continuity
+        // Open directly in real Chrome browser tab
         if (data.target_environment) {
+          try {
+            window.open(data.target_environment, "_blank", "noopener,noreferrer");
+          } catch (e) {
+            console.warn("window.open blocked by popup blocker", e);
+          }
           setActiveTargetUrl(data.target_environment);
         }
-        if (data.proposed_plan) {
-          setWorkerDagSteps(data.proposed_plan);
-        }
+
         setSessionContext((prev) => ({
           ...prev,
           portal: data.portal?.toLowerCase(),
@@ -527,39 +524,39 @@ export default function App() {
           pendingConfirmationUrl: undefined,
         }));
 
-        // Brief autonomous worker screen animation trigger
-        setIsExecutingPlan(true);
-        setTimeout(() => setIsExecutingPlan(false), 900);
-
         const openedMsg: ChatMessage = {
           id: `opened_${Date.now()}`,
           sender: "agent",
-          stage: 2,
-          stageName: "Phase 2: Target Portal Activated",
-          text: data.text || `I have opened ${data.portal}, what's the next step?`,
+          text: data.text || `I have opened ${data.portal}! What's the next step?`,
           timestamp: Date.now(),
+          openRealUrl: data.target_environment ? {
+            url: data.target_environment,
+            label: `Open ${data.portal} in Real Chrome`,
+          } : undefined,
           continuityOptions: data.suggestions,
           modelUsed: data.model_used,
         };
         setMessages((prev) => [...prev, openedMsg]);
       } else if (data.type === "PORTAL_ACTION_CONTINUITY") {
-        // Follow-up search or interaction within active portal
+        // Open follow-up action directly in real Chrome
         if (data.target_environment) {
+          try {
+            window.open(data.target_environment, "_blank", "noopener,noreferrer");
+          } catch (e) {
+            console.warn("window.open blocked by popup blocker", e);
+          }
           setActiveTargetUrl(data.target_environment);
         }
-        if (data.proposed_plan) {
-          setWorkerDagSteps(data.proposed_plan);
-        }
-        setIsExecutingPlan(true);
-        setTimeout(() => setIsExecutingPlan(false), 900);
 
         const contMsg: ChatMessage = {
           id: `cont_${Date.now()}`,
           sender: "agent",
-          stage: 3,
-          stageName: "Phase 3: Active Viewport Updated",
           text: data.text,
           timestamp: Date.now(),
+          openRealUrl: data.target_environment ? {
+            url: data.target_environment,
+            label: `Open in Real Chrome`,
+          } : undefined,
           continuityOptions: data.suggestions,
           modelUsed: data.model_used,
         };
@@ -579,12 +576,9 @@ export default function App() {
         };
         setMessages((prev) => [...prev, cancelMsg]);
       } else {
-        // Requirements Confirmed -> Render Action Plan Card
+        // Natural Conversational Requirement Handling (No DAG Plan Card)
         if (data.target_environment) {
           setActiveTargetUrl(data.target_environment);
-        }
-        if (data.proposed_plan) {
-          setWorkerDagSteps(data.proposed_plan);
         }
 
         if (data.songs) {
@@ -603,25 +597,26 @@ export default function App() {
           }));
         }
 
-        const planMsg: ChatMessage = {
-          id: `plan_${Date.now()}`,
+        const naturalMsg: ChatMessage = {
+          id: `msg_${Date.now()}`,
           sender: "agent",
-          stage: 2,
-          stageName: "Phase 2: Action Plan (DAG) Generation",
           text: data.summary,
           timestamp: Date.now(),
-          actionPlan: {
-            summary: data.summary,
-            targetEnvironment: data.target_environment,
-            steps: data.proposed_plan.map((s: any) => ({ ...s, status: "pending" })),
-            modelUsed: data.model_used,
-            isApproved: false,
-            chatGptPrompt: data.chatGptPrompt,
-            channelData: data.channelData,
-          },
+          openRealUrl: (data.target_environment && !data.target_environment.includes("about:blank")) ? {
+            url: data.target_environment,
+            label: `Open in Real Chrome`,
+          } : undefined,
+          weatherResult: data.weatherData,
+          mediaResults: data.songs ? { query: data.mediaQuery || "songs", items: data.songs } : undefined,
+          chatGptResult: data.chatGptPrompt ? {
+            prompt: data.chatGptPrompt,
+            code: "def add_numbers(a, b):\n    return a + b\n\nprint('Result:', add_numbers(15, 27))",
+            savedFile: "add_two_numbers.py",
+          } : undefined,
+          channelResult: data.channelData,
           modelUsed: data.model_used,
         };
-        setMessages((prev) => [...prev, planMsg]);
+        setMessages((prev) => [...prev, naturalMsg]);
       }
     } catch (err: any) {
       setMessages((prev) => [
@@ -640,6 +635,15 @@ export default function App() {
 
   // Handle Natural Language Portal Confirmation Choice
   const handleConfirmPortal = (msgId: string, choice: string) => {
+    const targetMsg = messages.find((m) => m.id === msgId);
+    if (choice.toLowerCase().includes("yes") && targetMsg?.portalConfirmation?.url) {
+      try {
+        window.open(targetMsg.portalConfirmation.url, "_blank", "noopener,noreferrer");
+      } catch (e) {
+        console.warn("window.open popup blocked", e);
+      }
+    }
+
     setMessages((prev) =>
       prev.map((m) =>
         m.id === msgId && m.portalConfirmation
@@ -1395,21 +1399,6 @@ if __name__ == "__main__":
             )}
           </button>
 
-          {/* Toggle Worker Screen (Live Mouse & Keyboard Viewport) */}
-          <button
-            type="button"
-            onClick={() => setShowWorkerScreen((prev) => !prev)}
-            className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${
-              showWorkerScreen
-                ? "bg-indigo-600/20 border-indigo-500/40 text-indigo-300"
-                : "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-400"
-            }`}
-            title="Toggle Autonomous Worker Screen with live keyboard and mouse visualization"
-          >
-            <Monitor className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">{showWorkerScreen ? "Hide Worker" : "Worker Screen"}</span>
-          </button>
-
           {/* Gemini Multimodal Vision Inspector Modal Trigger */}
           <button
             type="button"
@@ -1506,17 +1495,6 @@ if __name__ == "__main__":
           onOpenCdpInfo={() => setIsCdpModalOpen(true)}
         />
 
-        {/* Autonomous Worker Screen (Simulated Browser with Keyboard & Mouse Controller) */}
-        {showWorkerScreen && (
-          <ComputerUseWorkerScreen
-            activeUrl={activeTargetUrl}
-            activeFunction={activeFunction}
-            activeSubAgent={activeSubAgent}
-            isExecuting={isExecutingPlan}
-            dagSteps={workerDagSteps}
-          />
-        )}
-
         {/* Chat Stream & Conversation Area */}
         <div ref={chatScrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-4">
           {messages.length === 0 ? (
@@ -1581,8 +1559,8 @@ if __name__ == "__main__":
               // Agent Response
               return (
                 <div key={msg.id} className="my-3 space-y-3">
-                  {/* Stage Header Badge */}
-                  {msg.stageName && (
+                  {/* Stage Header Badge (Natural Conversation without DAG clutter) */}
+                  {msg.stageName && !msg.stageName.includes("DAG") && !msg.stageName.includes("Phase 2") && (
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                       <span className="w-2 h-2 rounded-full bg-indigo-500" />
                       <span className="font-semibold text-slate-300">{msg.stageName}</span>
@@ -1596,9 +1574,25 @@ if __name__ == "__main__":
                   )}
 
                   {/* Agent Text Bubble */}
-                  {msg.text && (!msg.actionPlan || msg.text !== msg.actionPlan.summary) && (
+                  {msg.text && (
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-sm p-4 text-xs sm:text-sm text-slate-200 shadow-md whitespace-pre-line leading-relaxed">
                       {msg.text}
+                    </div>
+                  )}
+
+                  {/* Real Chrome Direct Launcher Button */}
+                  {msg.openRealUrl && (
+                    <div className="pt-1">
+                      <a
+                        href={msg.openRealUrl.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-semibold text-xs shadow-md shadow-indigo-600/25 transition-all group"
+                      >
+                        <Globe className="w-4 h-4 text-sky-200" />
+                        <span>{msg.openRealUrl.label}</span>
+                        <ExternalLink className="w-3.5 h-3.5 opacity-80 group-hover:translate-x-0.5 transition-transform" />
+                      </a>
                     </div>
                   )}
 
@@ -1666,20 +1660,6 @@ if __name__ == "__main__":
                       modelUsed={msg.clarification.modelUsed}
                       onSubmitChoice={(choice) => handleClarificationChoice(msg.id, choice)}
                       answeredChoice={msg.clarification.answered}
-                    />
-                  )}
-
-                  {/* Action Plan Card */}
-                  {msg.actionPlan && (
-                    <ActionPlanCard
-                      summary={msg.actionPlan.summary}
-                      targetEnvironment={msg.actionPlan.targetEnvironment}
-                      steps={msg.actionPlan.steps}
-                      modelUsed={msg.actionPlan.modelUsed}
-                      isApproved={msg.actionPlan.isApproved}
-                      onApprovePlan={() => handleApprovePlan(msg.id)}
-                      onReplan={() => handleSendMessage("Replan workflow with alternative parameters")}
-                      isExecuting={isExecutingPlan}
                     />
                   )}
 
